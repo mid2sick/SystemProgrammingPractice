@@ -23,8 +23,8 @@ typedef struct {
     int conn_fd;  // fd to talk with client
     char buf[512];  // data sent by/to client
     size_t buf_len;  // bytes used by buf
-    // you don't need to change this.
-	int query_ID;
+    
+    int query_ID;
     int wait_for_write;  // used by handle_read to know if the header is read or not.
     FILE* fp;
 } request;
@@ -140,137 +140,129 @@ int main(int argc, char** argv) {
                 else
                 {
                     des_ready--;
-                    //do  // is this loop necessary?
-                    //{
-                        ret = handle_read(&requestP[i]); // parse data from client to requestP[conn_fd].buf
-                        if (ret <= 0) {
-                            fprintf(stderr, "bad request from %s\n", requestP[i].host);
-                            break;
-                        }
-                        if(!requestP[i].wait_for_write) sscanf(requestP[i].buf, "%d", &query);
-                        else query = requestP[i].query_ID;
+                    ret = handle_read(&requestP[i]); // parse data from client to requestP[conn_fd].buf
+                    if (ret <= 0) {
+                        fprintf(stderr, "bad request from %s\n", requestP[i].host);
+                        break;
+                    }
+                    if(!requestP[i].wait_for_write) sscanf(requestP[i].buf, "%d", &query);
+                    else query = requestP[i].query_ID;
 #ifdef READ_SERVER
-                        char buf[555];
-                        FILE *fp;
-                        Account client;
-                        struct flock fl = {F_RDLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
+                    char buf[555];
+                    FILE *fp;
+                    Account client;
+                    struct flock fl = {F_RDLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
+                    fl.l_pid = getpid();
+                    fp = fopen("copy", "rb");
+                    int fd = fileno(fp);
+                    int k = fcntl(fd, F_SETLK, &fl);
+                    printf("k = %d\n", k);
+                    if(k == -1) write(requestP[i].conn_fd, account_locked, strlen(account_locked));
+                    else
+                    {
+                        fseek(fp, sizeof(Account)*(query-1), SEEK_SET);
+                        fread(&client, sizeof(Account), 1, fp);
+                        sprintf(buf, "%s : %d %d\n", accept_read_header, client.id, client.balance);
+                        write(requestP[i].conn_fd, buf, strlen(buf));
+                        fl.l_type = F_UNLCK;
+                        fcntl(fd, F_SETLK, &fl);
+                        fclose(fp);
+                    }
+                        
+#else
+                    struct flock fl = { F_WRLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
+                    if(!(requestP[i].wait_for_write))
+                    {
+                        requestP[i].query_ID = query;
+                        printf("query id = %d\n", query);
+                        printf("check first\n");
                         fl.l_pid = getpid();
-                        fp = fopen("copy", "rb");
-                        int fd = fileno(fp);
-                        int k = fcntl(fd, F_SETLK, &fl);
+                        requestP[i].fp = fopen("copy","rb+");
+                        int k = fcntl(fileno(requestP[i].fp), F_SETLK, &fl);
                         printf("k = %d\n", k);
+                        if(errno == EACCES || errno == EAGAIN) printf("wrong\n");
                         if(k == -1) write(requestP[i].conn_fd, account_locked, strlen(account_locked));
                         else
                         {
-                            fseek(fp, sizeof(Account)*(query-1), SEEK_SET);
-                            fread(&client, sizeof(Account), 1, fp);
-                            sprintf(buf, "%s : %d %d\n", accept_read_header, client.id, client.balance);
-                            write(requestP[i].conn_fd, buf, strlen(buf));
-                            fl.l_type = F_UNLCK;
-                            fcntl(fd, F_SETLK, &fl);
-                            fclose(fp);
-                        }
-                        
-#else
-                        struct flock fl = { F_WRLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
-                        if(!(requestP[i].wait_for_write))
+                            write(requestP[i].conn_fd, modifiable, strlen(modifiable));
+                            requestP[i].wait_for_write = 1;
+                            continue;
+                        }    
+                    }
+                    else
+                    {
+                        char action[25];
+                        int num, num2, action_fail = 0;
+                        if((requestP[i].buf)[0] != 't') sscanf(requestP[i].buf, "%s %d", action, &num);
+                        else sscanf(requestP[i].buf, "%s %d %d", action, &num, &num2);
+                        Account client, client2;
+                        fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
+                        fread(&client, sizeof(Account), 1, requestP[i].fp);
+                        printf("query id = %d\n", query);
+                        printf("client id = %d balance = %d\n", client.id, client.balance);
+                        if(action[0] == 's')
                         {
-                            requestP[i].query_ID = query;
-                            printf("query id = %d\n", query);
-                            printf("check first\n");
-                            fl.l_pid = getpid();
-                            requestP[i].fp = fopen("copy","rb+");
-                            int k = fcntl(fileno(requestP[i].fp), F_SETLK, &fl);
-                            printf("k = %d\n", k);
-                            if(errno == EACCES || errno == EAGAIN) printf("wrong\n");
-                            if(k == -1) write(requestP[i].conn_fd, account_locked, strlen(account_locked));
+                            if(num < 0) action_fail = 1;
                             else
                             {
-                                write(requestP[i].conn_fd, modifiable, strlen(modifiable));
-                                requestP[i].wait_for_write = 1;
-                                continue;
-                            }    
+                                client.balance += num;
+                                fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
+                                fwrite(&client, sizeof(Account), 1, requestP[i].fp);
+                            }
+                        }
+                        else if(action[0] == 'w')
+                        {
+                            if(num < 0 || client.balance < num) action_fail = 1;
+                            else
+                            {
+                                client.balance -= num;
+                                fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
+                                fwrite(&client, sizeof(Account), 1, requestP[i].fp);
+                            }
+                        }
+                        else if(action[0] == 't')
+                        {
+                            fseek(requestP[i].fp, sizeof(Account)*(num-1), SEEK_SET);
+                            fread(&client2, sizeof(Account), 1, requestP[i].fp);   //don't need to check if client2 is locked
+                            if(num2 < 0 || client.balance < num2) action_fail = 1;
+                            else
+                            {
+                                client.balance -= num2;
+                                client2.balance += num2;
+                                fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
+                                fwrite(&client, sizeof(Account), 1, requestP[i].fp);
+                                fseek(requestP[i].fp, sizeof(Account)*(num-1), SEEK_SET);
+                                fwrite(&client2, sizeof(Account), 1, requestP[i].fp);
+                            }
                         }
                         else
                         {
-                            char action[25];
-                            int num, num2, action_fail = 0;
-                            if((requestP[i].buf)[0] != 't') sscanf(requestP[i].buf, "%s %d", action, &num);
-                            else sscanf(requestP[i].buf, "%s %d %d", action, &num, &num2);
-                            Account client, client2;
-                            fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
-                            fread(&client, sizeof(Account), 1, requestP[i].fp);
-                            printf("query id = %d\n", query);
-                            printf("client id = %d balance = %d\n", client.id, client.balance);
-                            if(action[0] == 's')
-                            {
-                                if(num < 0) action_fail = 1;
-                                else
-                                {
-                                    client.balance += num;
-                                    printf("client balance = %d\n", client.balance);
-                                    fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
-                                    printf("saving money\n");
-                                    fwrite(&client, sizeof(Account), 1, requestP[i].fp);
-                                }
-                            }
-                            else if(action[0] == 'w')
-                            {
-                                if(num < 0 || client.balance < num) action_fail = 1;
-                                else
-                                {
-                                    client.balance -= num;
-                                    fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
-                                    printf("withdrawing money\n");
-                                    fwrite(&client, sizeof(Account), 1, requestP[i].fp);
-                                }
-                            }
-                            else if(action[0] == 't')
-                            {
-                                printf("num2 = %d\n", num2);
-                                fseek(requestP[i].fp, sizeof(Account)*(num-1), SEEK_SET);
-                                fread(&client2, sizeof(Account), 1, requestP[i].fp);   //don't need to check if client2 is locked
-                                if(num2 < 0 || client.balance < num2) action_fail = 1;
-                                else
-                                {
-                                    client.balance -= num2;
-                                    client2.balance += num2;
-                                    printf("transferring money\n");
-                                    fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
-                                    fwrite(&client, sizeof(Account), 1, requestP[i].fp);
-                                    fseek(requestP[i].fp, sizeof(Account)*(num-1), SEEK_SET);
-                                    fwrite(&client2, sizeof(Account), 1, requestP[i].fp);
-                                }
-                            }
+                            if(num <= 0) action_fail = 1;
                             else
                             {
-                                if(num <= 0) action_fail = 1;
-                                else
-                                {
-                                    client.balance = num;
-                                    fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
-                                    fwrite(&client, sizeof(Account), 1, requestP[i].fp);
-                                }
+                                client.balance = num;
+                                fseek(requestP[i].fp, sizeof(Account)*(query-1), SEEK_SET);
+                                fwrite(&client, sizeof(Account), 1, requestP[i].fp);
                             }
-                            fl.l_type = F_UNLCK;
-                            fl.l_whence = SEEK_SET;
-                            fl.l_start = sizeof(Account)*(query-1);
-                            fl.l_len = sizeof(Account);
-                            fl.l_pid = getpid();
-                            fcntl(fileno(requestP[i].fp), F_SETLK, &fl);
-                            fclose(requestP[i].fp);
-                            if(action_fail) write(requestP[i].conn_fd, operation_fail, strlen(operation_fail));
-                            printf("action = %s num = %d\n", action, num);
                         }
+                        fl.l_type = F_UNLCK;
+                        fl.l_whence = SEEK_SET;
+                        fl.l_start = sizeof(Account)*(query-1);
+                        fl.l_len = sizeof(Account);
+                        fl.l_pid = getpid();
+                        fcntl(fileno(requestP[i].fp), F_SETLK, &fl);
+                        fclose(requestP[i].fp);
+                        if(action_fail) write(requestP[i].conn_fd, operation_fail, strlen(operation_fail));
+			else printf("id = %d balance = %d\n", client.id, client.balance);
+                    }
                                             
-                        sprintf(buf,"%s : %s\n",accept_write_header, requestP[i].buf);
-                        write(requestP[i].conn_fd, buf, strlen(buf));
-                        requestP[i].wait_for_write = 0;
+                    sprintf(buf,"%s : %s\n",accept_write_header, requestP[i].buf);
+                    write(requestP[i].conn_fd, buf, strlen(buf));
+                    requestP[i].wait_for_write = 0;
 #endif
-                        close(requestP[i].conn_fd);
-                        free_request(&requestP[i]);
-                        FD_CLR(i, &save_fds);
-                    //}while(1);	
+                    close(requestP[i].conn_fd);
+                    free_request(&requestP[i]);
+                    FD_CLR(i, &save_fds);	
                 }
             }
         }
