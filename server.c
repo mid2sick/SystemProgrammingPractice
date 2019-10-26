@@ -58,11 +58,6 @@ static int handle_read(request* reqP);
 // error code:
 // -1: client connection error
 
-static int Read_Account(request* reqP, int query_ID);
-// read account
-
-static int Write_Account(request* reqP, int query_ID);
-// write account
 
 typedef struct
 {
@@ -154,10 +149,29 @@ int main(int argc, char** argv) {
                         }
                         if(!requestP[i].wait_for_write) sscanf(requestP[i].buf, "%d", &query);
                         else query = requestP[i].query_ID;
-                        #ifdef READ_SERVER
-                        request_fail = Read_Account(&requestP[i], query);
-                        if(request_fail == -1) write(requestP[i].conn_fd, account_locked, strlen(account_locked));
-                        #else
+#ifdef READ_SERVER
+                        char buf[555];
+                        FILE *fp;
+                        Account client;
+                        struct flock fl = {F_RDLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
+                        fl.l_pid = getpid();
+                        fp = fopen("copy", "rb");
+                        int fd = fileno(fp);
+                        int k = fcntl(fd, F_SETLK, &fl);
+                        printf("k = %d\n", k);
+                        if(k == -1) write(requestP[i].conn_fd, account_locked, strlen(account_locked));
+                        else
+                        {
+                            fseek(fp, sizeof(Account)*(query-1), SEEK_SET);
+                            fread(&client, sizeof(Account), 1, fp);
+                            sprintf(buf, "%s : %d %d\n", accept_read_header, client.id, client.balance);
+                            write(requestP[i].conn_fd, buf, strlen(buf));
+                            fl.l_type = F_UNLCK;
+                            fcntl(fd, F_SETLK, &fl);
+                            fclose(fp);
+                        }
+                        
+#else
                         struct flock fl = { F_WRLCK, SEEK_SET, sizeof(Account)*(query-1), sizeof(Account), 0};
                         if(!(requestP[i].wait_for_write))
                         {
@@ -252,7 +266,7 @@ int main(int argc, char** argv) {
                         sprintf(buf,"%s : %s\n",accept_write_header, requestP[i].buf);
                         write(requestP[i].conn_fd, buf, strlen(buf));
                         requestP[i].wait_for_write = 0;
-                        #endif
+#endif
                         close(requestP[i].conn_fd);
                         free_request(&requestP[i]);
                         FD_CLR(i, &save_fds);
