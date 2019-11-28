@@ -121,13 +121,16 @@ int main(int argc,char *argv[])
     Host_FIFO_file = fopen(myfifo, "r");
     unlink(myfifo);
     host_fifo = fileno(Host_FIFO_file);
-
+    int cou = 0;
     while(data_cnt)  //when there is still some competitions haven't been given to hosts
     {
+        //printf("%d\n", data_cnt);
         int player_ID, player_rank;
         char *arr2;
         if(cnt > 0)  //if there is available host to get a new competition
         {
+            cou ++;
+            printf("count = %d\n", cou);
             fifo_left++;  //fifo_left records the number of hosts that haven't send data to bidding system
             data_cnt--;
             avail_host = avail[fnt]; //get the available host from queue
@@ -169,6 +172,7 @@ int main(int argc,char *argv[])
 
     while(fifo_left--)  //though all the data is given to hosts, there are still some hosts' feedback hasn't been read
     {
+
         int player_ID, player_rank;
         char *arr2;
         memset(arr, 0, sizeof(arr));

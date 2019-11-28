@@ -9,7 +9,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-void err_sys(const char* x) 
+void err_sys(const char* x)
 { 
     perror(x);
     exit(1); 
@@ -69,13 +69,15 @@ int main(int argc, char *argv[])
                 close(read_pipe[i][1]);
                 close(write_pipe[i][0]);
             }
-            char ori[80], w[5], to_fifo[80], *split;
+            char w[5], to_fifo[80];
             int winner_ID, player[8];
             while(fgets(arr,sizeof(arr), host_file))
             {
+                char ori[80], *split;
+                printf("arr = %s", arr);
                 memset(ori, 0, sizeof(ori));
                 strncpy(ori, arr, sizeof(arr));
-                split = strtok(arr, " ");
+                split = strtok(ori, " ");
                 for(i = 0; i < 8; i++)
                 {
                     player[i] = atoi(split);
@@ -89,13 +91,12 @@ int main(int argc, char *argv[])
                 {
                     write(write_pipe[0][1], "-1 -1 -1 -1\n", strlen("-1 -1 -1 -1\n"));
                     write(write_pipe[1][1], "-1 -1 -1 -1\n", strlen("-1 -1 -1 -1\n"));
-                    fflush(NULL);
                     wait(NULL);
                     exit(0);
                 }
                 write(write_pipe[0][1], buf1, strlen(buf1));
                 write(write_pipe[1][1], buf2, strlen(buf2));
-                char get[2][10], winner[20], win_money[10], *p[2], temp[20];
+                char get[2][20], winner[20], win_money[10], *p[2], temp[20];
                 int p_money[2];
                 for(i = 1; i < 10; i++)
                 {
@@ -115,8 +116,8 @@ int main(int argc, char *argv[])
                     winner_ID = atoi(w);
                     write(write_pipe[0][1], w, strlen(w));
                     write(write_pipe[1][1], w, strlen(w));
-                    fflush(NULL);
                 }
+                printf("winner = %d\n", winner_ID);
                 memset(get, 0, sizeof(get));
                 read(read_pipe[0][0], get[0], sizeof(get[0]));
                 read(read_pipe[1][0], get[1], sizeof(get[1]));
@@ -135,7 +136,6 @@ int main(int argc, char *argv[])
                     strcat(to_fifo, temp);
                 }
                 write(host0_fifo_fd, to_fifo, strlen(to_fifo));
-                fflush(NULL);
                 memset(arr, 0, sizeof(arr));
             }    
         }
@@ -255,6 +255,7 @@ int main(int argc, char *argv[])
         char get[2][10];
         while(read(STDIN_FILENO, arr, sizeof(arr)))
         {
+            fprintf(stderr, "leaf get %s", arr);
             int rp[2][2], wp[2][2];
             for(i = 0; i < 2; i++)
             {
@@ -274,11 +275,12 @@ int main(int argc, char *argv[])
                 close(rp[cur_host][1]);
 
                 close(wp[cur_host][1]);
-                dup2(wp[cur_host][0], STDIN_FILENO);
-                close(wp[cur_host][0]);
-
-                read(STDIN_FILENO, send_num, sizeof(send_num));
-
+                int k = dup2(wp[cur_host][0], STDIN_FILENO);
+                //close(wp[cur_host][0]);
+                memset(send_num, 0, sizeof(send_num));
+                int r = read(wp[cur_host][0], send_num, sizeof(send_num));
+                fprintf(stderr, "k = %d\nr = %d\n", k, r);
+                //fprintf(stderr, "player will get = %s", send_num);
                 char* argv2[] = {"./player", send_num, NULL};
                 if(execv("./player", argv2) < 0)
                 {
@@ -303,13 +305,15 @@ int main(int argc, char *argv[])
                     player[i] = atoi(split);
                     split = strtok(NULL, " ");
                 }
-
+                memset(buf1, 0, sizeof(buf1));
+                memset(buf2, 0, sizeof(buf2));
                 snprintf(buf1, sizeof(buf1), "%d\n", player[0]);
                 snprintf(buf2, sizeof(buf2), "%d\n", player[1]);
+                fprintf(stderr, "buf1 = %sbuf2 = %s", buf1, buf2);
+                
+                write(wp[0][1], "8\n", strlen("8\n"));
+                write(wp[1][1], "8\n", strlen("8\n"));
                 waitpid(-1, NULL,WNOHANG);
-                write(wp[0][1], buf1, strlen(buf1));
-                write(wp[1][1], buf2, strlen(buf2));
-
                 memset(get, 0, sizeof(get));
                 read(rp[0][0], get[0], sizeof(get[0]));
                 read(rp[1][0], get[1], sizeof(get[1]));
@@ -358,6 +362,7 @@ int main(int argc, char *argv[])
 
                 }
             }
+            memset(arr, 0, sizeof(arr));
         }
         
     }
